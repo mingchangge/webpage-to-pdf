@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-10-09T04:21:24.962Z",
+  "total": 1,
+  "success": 0,
+  "failed": 1,
+  "totalSizeMB": 0,
+  "items": [
+    {
+      "url": "https://cjyzbgs.moa.gov.cn/tzgg/202201/P020220106645283240849.ofd",
+      "title": "",
+      "filename": "202201_1791519676768.pdf",
+      "outputPath": "/Users/terren/Projects/webpage-to-pdf/output/202201_1791519676768.pdf",
+      "success": false,
+      "fileSize": 0,
+      "error": "OFD渲染失败，已保存原文件: 202201_1791519676768.ofd"
+    }
+  ]
+}
