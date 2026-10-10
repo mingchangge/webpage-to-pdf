@@ -27,12 +27,28 @@ function generatePdfFilename(item) {
   const dateMatch = url.match(/(\d{6})\//);
   const datePrefix = dateMatch ? dateMatch[1] : new Date().toISOString().slice(0, 7).replace('-', '');
 
+  const urlPath = url.split('?')[0].split('#')[0];
+  const ext = urlPath.split('.').pop().toLowerCase();
+
+  if (ext === 'pdf') {
+    const pdfIdMatch = url.match(/\/(P\d+)\.pdf/i) || url.match(/\/(\d{10,})[^/]*\.pdf/i);
+    const urlId = pdfIdMatch ? pdfIdMatch[1] : null;
+    const shortTitle = title && title.length > 60 ? title.slice(0, 60) : (title || '');
+    const titlePart = shortTitle ? `_${sanitizeFilename(shortTitle)}` : '';
+    if (urlId) {
+      return `${datePrefix}_${urlId}${titlePart}.pdf`;
+    }
+    if (shortTitle) {
+      return `${datePrefix}_${sanitizeFilename(shortTitle)}.pdf`;
+    }
+    return `${datePrefix}_${Date.now()}.pdf`;
+  }
+
   if (title) {
     const shortTitle = title.length > 60 ? title.slice(0, 60) : title;
     return `${datePrefix}_${sanitizeFilename(shortTitle)}.pdf`;
   }
 
-  // 无标题时从URL提取ID
   const idMatch = url.match(/t\d+_(\d+)\.htm/);
   const id = idMatch ? idMatch[1] : Date.now();
   return `${datePrefix}_${id}.pdf`;

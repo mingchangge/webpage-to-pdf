@@ -274,6 +274,21 @@ async function crawlPage(browser, item, index, total) {
 
   // 检测URL类型，文档类走下载+转换路径
   const urlType = detectUrlType(url);
+  if (urlType === 'pdf') {
+    console.log(`  📄 检测到PDF文件，直接下载`);
+    try {
+      ensureDir(config.outputDir);
+      await downloadFile(url, outputPath);
+      const stats = fs.statSync(outputPath);
+      result.success = true;
+      result.fileSize = stats.size;
+      console.log(`  ✓ PDF已保存: ${filename} (${formatFileSize(stats.size)})`);
+    } catch (error) {
+      result.error = error.message;
+      console.error(`  ✗ PDF下载失败: ${error.message}`);
+    }
+    return result;
+  }
   if (urlType !== 'html') {
     console.log(`  📄 检测到文档类型: ${urlType.toUpperCase()}`);
     try {
