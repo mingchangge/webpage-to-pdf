@@ -214,7 +214,7 @@ async function renderOfdInBrowser(browser, ofdFilePath, outputPath) {
 
     // 渲染成功，生成PDF
     console.log(`  → OFD渲染完成，正在生成PDF...`);
-    await page.pdf({ path: outputPath, ...config.pdf });
+    await page.pdf({ path: outputPath, ...config.pdf, timeout: 120000 });
 
     // 清理临时HTML
     if (fs.existsSync(htmlTempPath)) fs.unlinkSync(htmlTempPath);
@@ -246,7 +246,7 @@ async function renderLocalHtml(browser, htmlUrl, outputPath) {
 
     await delay(2000);
 
-    await page.pdf({ path: outputPath, ...config.pdf });
+    await page.pdf({ path: outputPath, ...config.pdf, timeout: 120000 });
 
     return fs.existsSync(outputPath) && fs.statSync(outputPath).size > 1000;
   } finally {
@@ -351,7 +351,168 @@ async function crawlPage(browser, item, index, total) {
     if (removedCount > 0) {
       console.log(`  → 已移除 ${removedCount} 个非内容元素`);
     }
+    // 生成PDF前：切换到打印视口宽度，让布局按打印尺寸排列
+    // A4纸宽210mm - 左右边距30mm = 180mm ≈ 680px@96DPI
+    const printViewportWidth = 680;
+    await page.setViewport({ ...config.viewport, width: printViewportWidth });
+    await delay(500);
 
+    // 滚动到顶部，确保文档坐标计算正确
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await delay(300);
+    // 紧凑布局：当内容距顶部过远时，压缩中间间距（保留头部，只挤间距）
+    if (config.compactLayout) {
+      const compactResult = await page.evaluate((cfg) => {
+        const { contentSelectors, compactThreshold } = cfg;
+
+        // 查找主要内容 div
+        let contentEl = null;
+        let matchedSelector = '';
+        for (const sel of contentSelectors) {
+          const el = document.querySelector(sel);
+          if (el && el.offsetHeight > 100) {
+            contentEl = el;
+            matchedSelector = sel;
+            break;
+          }
+        }
+        if (!contentEl) return { found: false };
+
+        // 使用文档坐标（rect.top + scrollY），不受滚动位置影响
+        const rect = contentEl.getBoundingClientRect();
+        const contentTop = rect.top + window.scrollY;
+
+        // 偏移不够大，不需要处理
+        if (contentTop < compactThreshold) {
+          return { found: true, selector: matchedSelector, offsetTop: Math.round(contentTop), compacted: false };
+        }
+
+        // 策略：从内容div向上遍历，逐层压缩margin/padding
+        // 1. 内容div自身的marginTop清零
+        contentEl.style.marginTop = '0';
+        contentEl.style.paddingTop = '0';
+
+        // 2. 向上遍历父元素，压缩中间容器的间距
+        let parent = contentEl.parentElement;
+        while (parent && parent !== document.body) {
+          const style = getComputedStyle(parent);
+          // 如果这个父元素的marginTop/paddingTop过大，压缩它
+          if (parseFloat(style.marginTop) > 10) parent.style.marginTop = '0';
+          if (parseFloat(style.paddingTop) > 10) parent.style.paddingTop = '0';
+          parent = parent.parentElement;
+        }
+
+        // 3. 找到内容div在body中的最外层容器，压缩它上方兄弟元素的间距
+        let container = contentEl;
+        while (container.parentElement && container.parentElement !== document.body) {
+          container = container.parentElement;
+        }
+        // 遍历容器之前的兄弟元素（头部区域），压缩它们的底部间距
+        let sibling = container.previousElementSibling;
+        while (sibling) {
+          const style = getComputedStyle(sibling);
+          if (parseFloat(style.marginBottom) > 10) sibling.style.marginBottom = '0';
+          if (parseFloat(style.paddingBottom) > 10) sibling.style.paddingBottom = '0';
+          // 如果兄弟元素高度过大（>200px且不是主要内容），限制其高度
+          if (sibling.offsetHeight > 200 && !sibling.querySelector(contentSelectors.join(','))) {
+            sibling.style.height = 'auto';
+            sibling.style.minHeight = '0';
+            sibling.style.overflow = 'visible';
+          }
+          sibling = sibling.previousElementSibling;
+        }
+
+        // 4. 压缩容器自身的顶部间距
+        container.style.marginTop = '0';
+        container.style.paddingTop = '0';
+
+        const newRect = contentEl.getBoundingClientRect();
+        const newTop = newRect.top + window.scrollY;
+        return {
+          found: true,
+          selector: matchedSelector,
+          offsetTop: Math.round(contentTop),
+          newOffsetTop: Math.round(newTop),
+          compacted: true,
+          saved: Math.round(contentTop - newTop),
+        };
+      }, config.compactLayout);
+
+      if (compactResult.found) {
+        if (compactResult.compacted) {
+          console.log(`  → 紧凑布局: ${compactResult.selector} 偏移 ${compactResult.offsetTop}px → ${compactResult.newOffsetTop}px（节省 ${compactResult.saved}px）`);
+        } else {
+          console.log(`  → 内容偏移 ${compactResult.offsetTop}px，无需紧凑处理`);
+        }
+      }
+    }
+    // 注入打印分页修复CSS：允许内容区域内分页，防止整块被推到下一页
+    await page.addStyleTag({
+      content: `
+        .sj_arc_body, .sj_arc_body *,
+        .sj_er_kuang_xiang, .sj_er_kuang_xiang *,
+        .article-content, .article-content *,
+        .TRS_Editor, .TRS_Editor *,
+        .Custom_UnionStyle, .Custom_UnionStyle *,
+        .pages_content, .pages_content *,
+        #content, #content *,
+        .content, .content *,
+        article, article *,
+        main, main *,
+        table, tr, td, th {
+          page-break-inside: auto !important;
+          break-inside: auto !important;
+        }
+        h1, h2, h3, h4, h5, h6, p {
+          page-break-after: avoid !important;
+          break-after: avoid-page !important;
+        }
+        br,
+        .sj_arc_body br,
+        .sj_er_kuang_xiang br,
+        .article-content br,
+        .TRS_Editor br,
+        .Custom_UnionStyle br,
+        .pages_content br,
+        #content br,
+        .content br,
+        article br,
+        main br {
+          page-break-before: auto !important;
+          page-break-after: auto !important;
+          break-before: auto !important;
+          break-after: auto !important;
+        }
+      `,
+    });
+    // 移除内容区域内带有 page-break-before:always 的 <br> 元素
+    const removedBrCount = await page.evaluate(() => {
+      const sels = [
+        '.sj_arc_body', '.article-content', '.TRS_Editor',
+        '.Custom_UnionStyle', '.pages_content', '#content',
+        '.content', 'article', 'main',
+      ];
+      let count = 0;
+      for (const sel of sels) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        el.querySelectorAll('br').forEach((br) => {
+          const s = getComputedStyle(br);
+          if (
+            s.pageBreakBefore === 'always' ||
+            s.pageBreakBefore === 'left' ||
+            s.pageBreakBefore === 'right'
+          ) {
+            br.remove();
+            count++;
+          }
+        });
+      }
+      return count;
+    });
+    if (removedBrCount > 0) {
+      console.log(`  → 已移除 ${removedBrCount} 个强制分页的 <br> 元素`);
+    }
     // 确保输出目录存在
     ensureDir(config.outputDir);
 
@@ -360,6 +521,7 @@ async function crawlPage(browser, item, index, total) {
     await page.pdf({
       path: outputPath,
       ...config.pdf,
+      timeout: 120000,
     });
 
     // 检查文件是否生成成功

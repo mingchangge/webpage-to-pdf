@@ -91,4 +91,15 @@ module.exports = {
 
     // 广告/弹窗遮罩
   ],
+  // 紧凑布局配置：当内容div距顶部过远时，压缩间距让内容提上去（保留头部）
+  compactLayout: {
+    // 需要紧凑处理的内容选择器（按优先级排列）
+    contentSelectors: [
+      '.sj_arc_body', '.article-content', '.TRS_Editor',
+      '.Custom_UnionStyle', '.pages_content', '#content',
+      '.content', 'article', 'main',
+    ],
+    // 内容div距顶部超过此值才触发紧凑处理（px）
+    compactThreshold: 400,
+  },
 };
