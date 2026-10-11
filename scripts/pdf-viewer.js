@@ -8,29 +8,85 @@ const path = require('path');
 const http = require('http');
 
 const PORT = 3210;
-const PDFS_DIR = path.join(__dirname, '..', 'output');
-const FLAGS_FILE = path.join(PDFS_DIR, '_flags.json');
+const PROJECT_ROOT = path.join(__dirname, '..');
+const DEFAULT_DIR = path.join(PROJECT_ROOT, 'output');
+
+// 当前目录（可运行时自由切换，仅允许普通目录）
+let currentDir = DEFAULT_DIR;
+
+// 快捷目录（相对项目根目录解析，也可直接用绝对路径）
+// 启动时自动遍历 output 下的一级子文件夹作为选项，外加 output 本身
+const PRESET_DIRS = [
+  { label: 'output', path: path.join(PROJECT_ROOT, 'output') },
+];
+
+// 启动时自动发现 output 下的一级子文件夹，加入快捷目录
+(function discoverOutputSubdirs() {
+  try {
+    for (const name of fs.readdirSync(DEFAULT_DIR, { withFileTypes: true })) {
+      if (name.isDirectory()) {
+        const full = path.join(DEFAULT_DIR, name.name);
+        PRESET_DIRS.push({
+          label: path.relative(PROJECT_ROOT, full), // 例如 output/pdfs
+          path: full,
+        });
+      }
+    }
+  } catch (e) {
+    // output 目录不存在时忽略
+  }
+})();
+
+// 各目录使用独立的标记文件：_flags.json 存于当前目录内
+function flagsFileFor(dir) {
+  return path.join(dir, '_flags.json');
+}
+
+// 校验目录合法性，返回 { ok, dir?, error? }
+function resolveDir(input) {
+  let dir = input.trim();
+  if (dir === '') dir = DEFAULT_DIR;
+  // 展开 ~ 为 home 目录
+  if (dir === '~' || dir.startsWith('~/') || dir.startsWith('~\\')) {
+    dir = path.join(process.env.HOME || process.env.USERPROFILE || '', dir.slice(1));
+  }
+  if (!path.isAbsolute(dir)) dir = path.resolve(PROJECT_ROOT, dir);
+  dir = path.normalize(dir);
+  if (!fs.existsSync(dir)) return { ok: false, error: '目录不存在：' + dir };
+  const stat = fs.statSync(dir);
+  if (!stat.isDirectory()) return { ok: false, error: '不是目录：' + dir };
+  return { ok: true, dir };
+}
+
+// 切换当前目录
+function setDir(input) {
+  const r = resolveDir(input);
+  if (!r.ok) return r;
+  currentDir = r.dir;
+  return { ok: true, dir: currentDir, relative: path.relative(PROJECT_ROOT, currentDir) || '.' };
+}
 
 // 获取 PDF 文件列表（仅当前目录下的 .pdf 文件，排除子目录）
 function getPdfList() {
-  if (!fs.existsSync(PDFS_DIR)) return [];
+  if (!fs.existsSync(currentDir)) return [];
   return fs
-    .readdirSync(PDFS_DIR)
-    .filter((f) => f.toLowerCase().endsWith('.pdf') && fs.statSync(path.join(PDFS_DIR, f)).isFile())
+    .readdirSync(currentDir)
+    .filter((f) => f.toLowerCase().endsWith('.pdf') && fs.statSync(path.join(currentDir, f)).isFile())
     .sort();
 }
 
-// 读取已有的标记数据
+// 读取已有的标记数据（存于当前目录内的 _flags.json）
 function loadFlags() {
-  if (fs.existsSync(FLAGS_FILE)) {
-    return JSON.parse(fs.readFileSync(FLAGS_FILE, 'utf-8'));
+  const flagsFile = flagsFileFor(currentDir);
+  if (fs.existsSync(flagsFile)) {
+    return JSON.parse(fs.readFileSync(flagsFile, 'utf-8'));
   }
   return [];
 }
 
-// 保存标记数据
+// 保存标记数据（存于当前目录内的 _flags.json）
 function saveFlags(flags) {
-  fs.writeFileSync(FLAGS_FILE, JSON.stringify(flags, null, 2), 'utf-8');
+  fs.writeFileSync(flagsFileFor(currentDir), JSON.stringify(flags, null, 2), 'utf-8');
 }
 
 // 内嵌的 HTML 页面
@@ -44,10 +100,21 @@ const HTML = `<!DOCTYPE html>
   body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background: #f5f5f5; height: 100vh; display: flex; flex-direction: column; }
 
   /* 顶部导航栏 */
-  .navbar { background: #1a1a2e; color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 15px; flex-shrink: 0; }
+  .navbar { background: #1a1a2e; color: #fff; padding: 10px 20px; display: flex; align-items: center; gap: 15px; flex-shrink: 0; flex-wrap: wrap; }
   .navbar h1 { font-size: 16px; font-weight: 600; white-space: nowrap; }
   .nav-info { font-size: 14px; color: #aaa; }
   .nav-btns { display: flex; gap: 8px; margin-left: auto; }
+
+  /* 目录切换 */
+  .dir-switcher { display: flex; align-items: center; gap: 8px; }
+  .dir-switcher label { font-size: 12px; color: #aaa; white-space: nowrap; }
+  .dir-switcher select { background: #16213e; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; font-size: 13px; }
+  .dir-custom { display: flex; gap: 4px; align-items: center; }
+  .dir-custom input { background: #16213e; color: #fff; border: 1px solid #444; border-radius: 4px; padding: 5px 8px; font-size: 12px; width: 220px; }
+  .dir-custom input::placeholder { color: #666; }
+  .dir-custom .btn { background: #0f3460; color: #fff; }
+  .dir-custom .btn:hover { background: #16213e; }
+  .dir-error { font-size: 12px; color: #e94560; }
   .btn { padding: 6px 16px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: 500; transition: all .15s; }
   .btn:disabled { opacity: .4; cursor: not-allowed; }
   .btn-nav { background: #16213e; color: #fff; border: 1px solid #444; }
@@ -58,6 +125,9 @@ const HTML = `<!DOCTYPE html>
   .btn-export:hover { background: #16213e; }
   .btn-clear { background: transparent; color: #aaa; border: 1px solid #555; }
   .btn-clear:hover { color: #fff; border-color: #888; }
+
+  /* 目录切换栏 */
+  .dir-bar { background: #fff; border-bottom: 1px solid #ddd; padding: 8px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex-shrink: 0; }
 
   /* 主体区域 */
   .main { display: flex; flex: 1; overflow: hidden; }
@@ -117,6 +187,22 @@ const HTML = `<!DOCTYPE html>
   </div>
 </div>
 
+<!-- 目录切换栏 -->
+<div class="dir-bar">
+  <div class="dir-switcher">
+    <label>📁 快捷目录：</label>
+    <select id="dirSelect" onchange="if(this.value) switchDir(this.value)">
+      <option value="">—</option>
+    </select>
+  </div>
+  <div class="dir-custom">
+    <input id="dirInput" type="text" placeholder="输入任意路径（如 ~/project/output/pdfs 或绝对路径）" />
+    <button class="btn" onclick="switchDir(document.getElementById('dirInput').value)">切换</button>
+  </div>
+  <span class="dir-error" id="dirError"></span>
+  <span class="nav-info" id="dirInfo"></span>
+</div>
+
 <!-- 主体 -->
 <div class="main">
   <!-- PDF 查看区 -->
@@ -172,21 +258,63 @@ let flags = [];
 
 // 初始化
 async function init() {
+  // 加载快捷目录
+  const pres = await (await fetch('/api/preset-dirs')).json();
+  const sel = document.getElementById('dirSelect');
+  sel.innerHTML = '<option value="">—</option>' +
+    pres.map(d => '<option value="' + d.path + '">' + d.label + '</option>').join('');
+
+  await refreshAll();
+}
+
+// 刷新当前目录的列表与标记
+async function refreshAll() {
+  const info = await (await fetch('/api/cur-dir')).json();
+  document.getElementById('dirInfo').textContent =
+    '当前：' + (info.relative || info.dir);
+
   const res = await fetch('/api/pdfs');
   pdfs = await res.json();
+  current = 0;
 
   const fRes = await fetch('/api/flags');
   flags = await fRes.json();
 
   renderFlags();
-  if (pdfs.length > 0) show(0);
-  else document.getElementById('pdfFrame').style.display = 'none';
+  if (pdfs.length > 0) {
+    document.getElementById('pdfFrame').style.display = '';
+    show(0);
+  } else {
+    document.getElementById('pdfFrame').style.display = 'none';
+  }
+}
+
+// 切换目录（支持绝对路径，服务端解析）
+async function switchDir(dirPath) {
+  const errEl = document.getElementById('dirError');
+  errEl.textContent = '';
+  if (!dirPath || dirPath === '—') { refreshAll(); return; }
+  const r = await (await fetch('/api/set-dir', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ dir: dirPath })
+  })).json();
+  if (!r.ok) {
+    errEl.textContent = '❌ ' + r.error;
+    return;
+  }
+  // 同步下拉框选中项（若是快捷目录）
+  document.getElementById('dirSelect').value = r.dir;
+  document.getElementById('dirInput').value = '';
+  await refreshAll();
 }
 
 function show(idx) {
   if (idx < 0 || idx >= pdfs.length) return;
   current = idx;
-  document.getElementById('pdfFrame').src = '/api/pdf/' + encodeURIComponent(pdfs[idx]);
+  const frame = document.getElementById('pdfFrame');
+  frame.style.display = ''; // 防止切换目录后被误隐藏
+  frame.src = '/api/pdf/' + encodeURIComponent(pdfs[idx]);
   document.getElementById('currentFile').textContent = pdfs[idx];
   document.getElementById('navInfo').textContent = (idx + 1) + ' / ' + pdfs.length;
   document.getElementById('btnPrev').disabled = idx === 0;
@@ -227,7 +355,12 @@ async function removeFlag(filename) {
   renderFlags();
 }
 
-// 渲染标记列表
+// HTML 转义
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+// 渲染标记列表（事件委托，避免把文件名内嵌进 onclick）
 function renderFlags() {
   document.getElementById('flagCount').textContent = flags.length;
   const container = document.getElementById('flagItems');
@@ -235,15 +368,23 @@ function renderFlags() {
     container.innerHTML = '<div class="empty">暂无标记</div>';
     return;
   }
-  container.innerHTML = flags.map(f =>
+  container.innerHTML = flags.map((f, i) =>
     '<div class="flag-item">' +
-      '<div class="flag-title">' + f.filename + '</div>' +
-      '<div class="flag-type">类型：' + f.type + '</div>' +
-      (f.note ? '<div class="flag-note">备注：' + f.note + '</div>' : '') +
-      '<div class="flag-actions"><button class="btn-sm" onclick="removeFlag(\\'' + f.filename + '\\')">删除标记</button></div>' +
+      '<div class="flag-title">' + esc(f.filename) + '</div>' +
+      '<div class="flag-type">类型：' + esc(f.type) + '</div>' +
+      (f.note ? '<div class="flag-note">备注：' + esc(f.note) + '</div>' : '') +
+      '<div class="flag-actions"><button class="btn-sm" data-idx="' + i + '">删除标记</button></div>' +
     '</div>'
   ).join('');
 }
+
+// 事件委托：点击「删除标记」
+document.getElementById('flagItems').addEventListener('click', (e) => {
+  const btn = e.target.closest('.btn-sm');
+  if (!btn) return;
+  const idx = parseInt(btn.getAttribute('data-idx'), 10);
+  if (!isNaN(idx) && flags[idx]) removeFlag(flags[idx].filename);
+});
 
 // 导出标记
 function exportFlags() {
@@ -300,7 +441,7 @@ const server = http.createServer((req, res) => {
   // API: 获取单个 PDF 文件
   if (url.pathname.startsWith('/api/pdf/')) {
     const filename = decodeURIComponent(url.pathname.slice('/api/pdf/'.length));
-    const filePath = path.join(PDFS_DIR, filename);
+    const filePath = path.join(currentDir, filename);
 
     if (!fs.existsSync(filePath)) {
       res.writeHead(404);
@@ -338,6 +479,37 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // API: 获取当前目录信息（展示用）
+  if (url.pathname === '/api/cur-dir') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      dir: currentDir,
+      relative: path.relative(PROJECT_ROOT, currentDir) || '.',
+    }));
+    return;
+  }
+
+  // API: 快捷目录列表
+  if (url.pathname === '/api/preset-dirs') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(PRESET_DIRS));
+    return;
+  }
+
+  // API: 切换当前目录（绝对路径或相对项目根目录）
+  if (url.pathname === '/api/set-dir' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      let dir = '';
+      try { dir = JSON.parse(body).dir; } catch (e) {}
+      const r = setDir(dir);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(r));
+    });
+    return;
+  }
+
   res.writeHead(404);
   res.end('Not found');
 });
@@ -351,6 +523,10 @@ server.listen(PORT, () => {
   console.log('  ← →   上一个/下一个');
   console.log('  F      标记当前 PDF 有问题');
   console.log('  S      跳过（下一个）');
+  console.log('\n提示：可在页面顶部自由切换目录（快捷目录 或 输入任意路径）\n');
+  console.log('当前目录：' + currentDir);
+  console.log('快捷目录：');
+  PRESET_DIRS.forEach((d) => console.log('  - ' + d.label + '  (' + d.path + ')'));
   console.log('\n按 Ctrl+C 退出\n');
 
   const pdfs = getPdfList();
