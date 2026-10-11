@@ -50,11 +50,12 @@ function generateReport(results) {
  */
 async function main() {
   // 读取URL列表
-  const urlsPath = path.join(__dirname, 'urls.json');
+  const json='urls.json';
+  const urlsPath = path.join(__dirname, json);
 
   if (!fs.existsSync(urlsPath)) {
-    console.error('错误: urls.json 文件不存在');
-    console.error('请创建 urls.json 文件，格式如下:');
+    console.error(`错误: ${json} 文件不存在`);
+    console.error(`请创建 ${json} 文件，格式如下:`);
     console.error(JSON.stringify([{ url: 'https://example.com', title: '示例页面' }], null, 2));
     process.exit(1);
   }
@@ -62,7 +63,7 @@ async function main() {
   const urlList = JSON.parse(fs.readFileSync(urlsPath, 'utf-8'));
 
   if (!Array.isArray(urlList) || urlList.length === 0) {
-    console.error('错误: urls.json 为空或格式不正确');
+    console.error(`错误: ${json} 为空或格式不正确`);
     process.exit(1);
   }
 

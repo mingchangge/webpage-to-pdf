@@ -81,6 +81,9 @@ node index.js --retry-failed
 
 # 直接爬取单个 URL
 node index.js https://example.com/page1
+
+# 查看爬取报告 打开 http://localhost:3210 查看pdf
+node scripts/pdf-viewer.js
 ```
 
 ### 输出结果

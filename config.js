@@ -2,7 +2,7 @@ const path = require('path');
 
 module.exports = {
   // 输出目录
-  outputDir: path.join(__dirname, 'output'),
+  outputDir: path.join(__dirname, 'output/pdfs/'),
 
   // Puppeteer 启动配置
   browser: {
